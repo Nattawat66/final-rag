@@ -7,6 +7,7 @@ from core.utils import cosine, cosine_many  # noqa: F401 — ตัวช่ว�
 from student import settings  # noqa: F401 — TOP_K, QUERY_WITH_OPTIONS, HYBRID_WEIGHT, MIN_SCORE
 import math
 import re
+from collections import Counter
 
 
 def make_query(question: str, options: list[str]) -> str:
@@ -48,19 +49,30 @@ def search(chunks: list[Chunk], query_text: str, query_vector: list[float] | Non
             vector_scores = [float(s) for s in cosine_many(query_vector, vectors)]
         except (TypeError, ValueError, ZeroDivisionError):
             vector_scores = None
-    terms = _terms(query_text)
+    terms = set(_terms(query_text))
+    tokenized = [_terms(chunk.text) for chunk in chunks]
+    doc_counts = [Counter(doc) for doc in tokenized]
+    doc_freq: Counter = Counter()
+    for counts in doc_counts:
+        doc_freq.update(counts.keys())
+    avg_len = sum(map(len, tokenized)) / max(1, len(tokenized))
+    # BM25 rewards rare query terms and normalizes for chunk length. This is
+    # useful for Thai n-grams, exact identifiers, and numeric strings.
+    k1, b = 1.5, 0.75
+    n_docs = len(chunks)
     lex_scores = []
-    for chunk in chunks:
-        doc_terms = _terms(chunk.text)
-        if not terms or not doc_terms:
-            lex_scores.append(0.0)
-            continue
-        counts: dict[str, int] = {}
-        for term in doc_terms:
-            counts[term] = counts.get(term, 0) + 1
-        # Length-normalized term coverage; exact identifiers and numbers remain useful.
-        matched = sum(min(3, counts.get(t, 0)) for t in set(terms))
-        lex_scores.append(matched / max(1, len(set(terms))) / (1 + math.log1p(len(doc_terms)) / 8))
+    for tokens, counts in zip(tokenized, doc_counts):
+        score = 0.0
+        doc_len = len(tokens)
+        for term in terms:
+            tf = counts.get(term, 0)
+            if not tf:
+                continue
+            df = doc_freq[term]
+            idf = math.log1p((n_docs - df + 0.5) / (df + 0.5))
+            norm = tf + k1 * (1 - b + b * doc_len / max(avg_len, 1e-9))
+            score += idf * tf * (k1 + 1) / norm
+        lex_scores.append(score)
     mx = max(lex_scores, default=0.0)
     lex_scores = [s / mx if mx else 0.0 for s in lex_scores]
     weight = max(0.0, min(1.0, float(getattr(settings, "HYBRID_WEIGHT", 0.0))))

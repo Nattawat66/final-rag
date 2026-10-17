@@ -35,9 +35,13 @@ def split(doc_id: str, text: str) -> list[str]:
         heading_stack: list[str] = []
         body: list[str] = []
         current_title = ""
+        in_fence = False
         for line in text.splitlines():
             stripped = line.lstrip()
-            if stripped.startswith("#") and len(stripped) > 1 and stripped[1] in " \t":
+            fence_line = bool(re.match(r"(?:`{3,}|~{3,})", stripped))
+            is_heading = (not in_fence and not fence_line and stripped.startswith("#")
+                          and len(stripped) > 1 and stripped[1] in " \t")
+            if is_heading:
                 if body:
                     sections.append((current_title, "\n".join(body).strip()))
                 level = len(stripped) - len(stripped.lstrip("#"))
@@ -48,6 +52,8 @@ def split(doc_id: str, text: str) -> list[str]:
                 body = []
             else:
                 body.append(line)
+            if fence_line:
+                in_fence = not in_fence
         if body or not sections:
             sections.append((current_title, "\n".join(body).strip()))
     else:
